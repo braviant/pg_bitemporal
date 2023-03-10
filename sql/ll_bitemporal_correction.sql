@@ -20,6 +20,9 @@ v_sql  text;
   v_effective_start temporal_relationships.time_endpoint:=lower(p_effective) ;
   v_keys int[];
   v_keys_old  int[];
+  v_list_of_fields text;
+  v_list_of_fields_final_insert text := '';
+  v_field text;
 BEGIN
  v_table_attr := bitemporal_internal.ll_bitemporal_list_of_fields(v_table);
  IF  array_length(v_table_attr,1)=0
@@ -28,7 +31,25 @@ BEGIN
  END IF;
 
  v_list_of_fields_to_insert:= array_to_string(v_table_attr, ',','');
- EXECUTE 
+ 
+--surround with commas and remove white space, then we can test for field
+--surrounded by commas using like.
+v_list_of_fields := ','||regexp_replace(p_list_of_fields,'[[:space:]]*','','g')||',';
+
+--loop through all of the fields that will be inserted and prepend the proper
+--alias, t. if the field is not being updated and nv. (new value) if it is
+--being updated.
+foreach v_field in array v_table_attr loop
+    v_list_of_fields_final_insert := v_list_of_fields_final_insert
+        || case when '' <> v_list_of_fields_final_insert then ',' else '' end
+        || case
+            when v_list_of_fields like '%,'||v_field||',%' then 'nv.'
+            else 't.'
+        end
+        ||v_field;
+end loop;
+
+EXECUTE 
  format($u$ WITH updt AS (UPDATE %s SET asserted = temporal_relationships.timeperiod_range(lower(asserted), %L, '[)')
                     WHERE ( %s )=( %s ) AND  %L=lower(effective)
                           AND upper(asserted)='infinity' 
@@ -45,25 +66,7 @@ BEGIN
           , v_serial_key) into v_keys_old;
  --       raise notice 'sql%', v_sql;  
 
- EXECUTE 
--- v_sql:=
- format($i$WITH inst AS (INSERT INTO %s ( %s, effective, asserted )
-                SELECT %s ,effective, temporal_relationships.timeperiod_range(upper(asserted), 'infinity', '[)')
-                  FROM %s WHERE ( %s )IN ( %s ) 
-                                returning %s )
-                                    SELECT array_agg(%s) FROM inst $i$  --insert new assertion rage with old values where applicable 
-          , v_table
-          , v_list_of_fields_to_insert
-          , v_list_of_fields_to_insert
-          , v_table
-          , v_serial_key
-          , coalesce(array_to_string(v_keys_old,','),'NULL')
-          , v_serial_key
-          , v_serial_key
-)into v_keys;
---raise notice 'sql%', v_sql;  
 
---raise notice 'sql%', v_sql;  
 if coalesce(array_to_string(v_keys_old,',')) IS NULL 
    then 
 EXECUTE   format($uu$UPDATE %s SET ( %s ) = (SELECT %s ) WHERE ( %s ) = ( %s )
@@ -80,18 +83,25 @@ EXECUTE   format($uu$UPDATE %s SET ( %s ) = (SELECT %s ) WHERE ( %s ) = ( %s )
 	;
 
 ELSE 
- EXECUTE 
--- v_sql:=   
- format($uu$UPDATE %s SET ( %s ) = ( SELECT %s ) WHERE ( %s ) IN ( %s )
-                           $uu$  --update new assertion rage with new values
+---insert new assertion range with new values and new effective range
+--(combined insert and update to decrease I/O)
+EXECUTE format($i$ INSERT INTO %s ( %s, effective, asserted )
+                  SELECT %s ,effective, temporal_relationships.timeperiod_range(upper(asserted), 'infinity', '[)')
+                  FROM %s t
+                  cross join lateral (select %s) nv(%s)
+                  WHERE (%s) in (%s)
+                $i$
           , v_table
-          , p_list_of_fields
+          , v_list_of_fields_to_insert
+          , v_list_of_fields_final_insert
+          , v_table
           , p_list_of_values
+          , p_list_of_fields
           , v_serial_key
-          ,coalesce(array_to_string(v_keys,','), 'NULL'));
-          
-   --  raise notice 'sql%', v_sql; 
- END IF;  
+          , array_to_string(v_keys_old,',')
+);
+end if;
+
  GET DIAGNOSTICS v_rowcount:=ROW_COUNT; 
 
  RETURN v_rowcount;

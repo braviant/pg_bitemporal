@@ -140,6 +140,9 @@ v_table text:=p_schema_name||'.'||p_table_name;
 v_keys_old int[];
 v_keys int[];
 v_now timestamptz:=now();-- so that we can reference this time
+v_list_of_fields text;
+v_list_of_fields_final_insert text := '';
+v_field text;
 BEGIN 
  IF lower(p_asserted)<v_now::date --should we allow this precision?...
     OR upper(p_asserted)< 'infinity'
@@ -154,6 +157,23 @@ IF  array_length(v_table_attr,1)=0
  END IF;
 v_list_of_fields_to_insert_excl_effective:= array_to_string(v_table_attr, ',','');
 v_list_of_fields_to_insert:= v_list_of_fields_to_insert_excl_effective||',effective';
+
+--surround with commas and remove white space, then we can test for field
+--surrounded by commas using like.
+v_list_of_fields := ','||regexp_replace(p_list_of_fields,'[[:space:]]*','','g')||',';
+
+--loop through all of the fields that will be inserted and prepend the proper
+--alias, t. if the field is not being updated and nv. (new value) if it is
+--being updated.
+foreach v_field in array v_table_attr loop
+    v_list_of_fields_final_insert := v_list_of_fields_final_insert
+        || case when '' <> v_list_of_fields_final_insert then ',' else '' end
+        || case
+            when v_list_of_fields like '%,'||v_field||',%' then 'nv.'
+            else 't.'
+        end
+        ||v_field;
+end loop;
 
 --end assertion period for the old record(s)
 
@@ -200,39 +220,26 @@ EXECUTE format($i$INSERT INTO %s ( %s, effective, asserted )
 );
 
 
----insert new assertion rage with old values and new effective range
- 
-EXECUTE format($i$ WITH inst AS (INSERT INTO %s ( %s, effective, asserted )
+---insert new assertion range with new values and new effective range
+--(combined insert and update to decrease I/O)
+EXECUTE format($i$ INSERT INTO %s ( %s, effective, asserted )
                   SELECT %s ,%L, %L
-                   FROM %s WHERE ( %s )in ( %s )  returning %s )
-                                    SELECT array_agg(%s) FROM inst
-                                      $i$
+                  FROM %s t
+                  cross join lateral (%s) nv(%s)
+                  WHERE (%s) in (%s)
+                $i$
           , v_table
           , v_list_of_fields_to_insert_excl_effective
-          , v_list_of_fields_to_insert_excl_effective
+          , v_list_of_fields_final_insert
           , p_effective
           , p_asserted
           , v_table
+          , p_values_selected_update
+          , p_list_of_fields
           , v_serial_key
           , array_to_string(v_keys_old,',')
-          , v_serial_key
-          , v_serial_key
-) 
-into v_keys;
---update new record(s) in new assertion rage with new values  
-                           
-                                  
-EXECUTE format($u$ UPDATE %s t SET (%s) = (%s)
-                    WHERE ( %s ) in ( %s ) $u$  
-          , v_table
-          , p_list_of_fields
-          , p_values_selected_update
-          , v_serial_key
-          , array_to_string(v_keys,',')); 
-          
-          
-          
-          
+);
+
 GET DIAGNOSTICS v_rowcount:=ROW_COUNT;  
 RETURN v_rowcount;
 END;    
