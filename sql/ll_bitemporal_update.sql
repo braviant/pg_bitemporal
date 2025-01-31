@@ -45,16 +45,20 @@ EXECUTE format($u$ WITH updt AS (UPDATE %s SET asserted =
                                        temporal_relationships.is_meets(effective::temporal_relationships.timeperiod, %L)
                                        OR 
                                        temporal_relationships.has_finishes(effective::temporal_relationships.timeperiod, %L))
-                                      AND now()<@ asserted  returning %s )
+                                      AND lower(%L::temporal_relationships.timeperiod)<@ asserted  returning %s )
                                       SELECT array_agg(%s) FROM updt
                                       $u$  
-          , v_table
+                                      --changed now() to lower(%L::temporal_relationships.timeperiod)
+                                      --in the line 3 lines above this comment to handle the more generic case of
+                                      --using a timeperiod that doesn't start with now()
+      , v_table
           , p_asserted
           , p_search_fields
           , p_search_values
           , p_effective
           , p_effective
           , p_effective
+          , p_asserted
           , v_serial_key
           , v_serial_key) into v_keys_old;
 

@@ -39,14 +39,18 @@ EXECUTE format($u$ UPDATE %s t    SET asserted =
                                        temporal_relationships.is_meets(effective::temporal_relationships.timeperiod, %L)
                                        OR 
                                        temporal_relationships.has_finishes(effective::temporal_relationships.timeperiod, %L))
-                                      AND now()<@ asserted  $u$  
+                                      AND lower(%L::temporal_relationships.timeperiod)<@ asserted  $u$
+                                      --changed now() to lower(%L::temporal_relationships.timeperiod)
+                                      --in the line above this comment to handle the more generic case of
+                                      --using a timeperiod that doesn't start with now()
           , p_table
           , p_asserted
           , p_search_fields
           , p_values_selected_search
           , p_effective
           , p_effective
-          , p_effective);
+          , p_effective
+          , p_asserted);
 
  --insert new assertion rage with old values and effective-ended
 EXECUTE format($i$INSERT INTO %s ( %s, effective, asserted )
@@ -160,9 +164,12 @@ EXECUTE format($u$ WITH updt AS (UPDATE %s t SET asserted =
                                        temporal_relationships.is_meets(effective::temporal_relationships.timeperiod, %L)
                                        OR 
                                        temporal_relationships.has_finishes(effective::temporal_relationships.timeperiod, %L))
-                                      AND now()<@ asserted returning %s )
+                                      AND lower(%L::temporal_relationships.timeperiod)<@ asserted returning %s )
                                       SELECT array_agg(%s) FROM updt
                                       $u$  
+                                      --changed now() to lower(%L::temporal_relationships.timeperiod)
+                                      --in the line 3 lines above this comment to handle the more generic case of
+                                      --using a timeperiod that doesn't start with now()
           , v_table
           , p_asserted
           , p_search_fields
@@ -170,6 +177,7 @@ EXECUTE format($u$ WITH updt AS (UPDATE %s t SET asserted =
           , p_effective
           , p_effective
           , p_effective
+          , p_asserted
           , v_serial_key
           , v_serial_key) into v_keys_old;
   if v_keys_old is null then 
